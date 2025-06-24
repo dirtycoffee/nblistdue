@@ -1,0 +1,67 @@
+#!/usr/bin/env bash
+
+_subcommands add "list-due"
+
+_subcommands describe "list-due" <<'HEREDOC'
+Usage:
+  nb list-due [--sorted | --overdue]
+
+Description:
+  Lists todos in the current notebook that include a ## Due section.
+
+Options:
+  --sorted   Sort todos by due date.
+  --overdue  Show only overdue todos.
+
+If no options are provided, shows all todos with due dates.
+HEREDOC
+
+_list-due() {
+  mode="${1:-}"
+
+  if [[ -n "$mode" && "$mode" != "--sorted" && "$mode" != "--overdue" ]]; then
+    >&2 echo "Error: Invalid option. Use --sorted or --overdue, or leave blank."
+    _subcommands describe "list-due"
+    return 1
+  fi
+
+  todo_ids=$(nb todo list --no-color | awk '{ match($0, /\[[0-9]+\]/); if (RSTART) print substr($0, RSTART+1, RLENGTH-2) }')
+  [[ -z "$todo_ids" ]] && { echo "No todos found."; return 0; }
+
+  output=""
+  while IFS= read -r id; do
+    content=$(nb show "$id" --print --no-color 2>/dev/null)
+    title=$(echo "$content" | awk '/^# \[.\] / {sub(/^# \[[ xX]\] /,""); print; exit}')
+
+    due=$(echo "$content" | awk '
+      in_due && NF { print; exit }
+      /^##[[:space:]]*Due[[:space:]]*$/ { in_due=1 }
+    ')
+
+    if [[ -n "$due" ]]; then
+      printf -v line "%s\t%s\t%s\n" "$due" "$id" "$title"
+      output+="$line"
+    fi
+  done <<< "$todo_ids"
+
+  [[ -z "$output" ]] && { echo "No todos with due dates found."; return 0; }
+
+  today=$(date +%F)
+  case "$mode" in
+    --sorted)
+      echo "Todos with Due Dates (Sorted):"
+      echo "------------------------------"
+      printf "%s" "$output" | grep -v '^\s*$' | sort | awk -F'\t' '{ printf "• [%s] %s (Due: %s)\n", $2, $3, $1 }'
+      ;;
+    --overdue)
+      echo "Overdue Todos:"
+      echo "--------------"
+      printf "%s" "$output" | grep -v '^\s*$' | awk -F'\t' -v today="$today" '$1 < today { printf "• [%s] %s (Due: %s)\n", $2, $3, $1 }'
+      ;;
+    *)
+      echo "Todos with Due Dates:"
+      echo "----------------------"
+      printf "%s" "$output" | grep -v '^\s*$' | awk -F'\t' '{ printf "• [%s] %s (Due: %s)\n", $2, $3, $1 }'
+      ;;
+  esac
+}
