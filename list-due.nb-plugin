@@ -4,12 +4,13 @@ _subcommands add "list-due"
 
 _subcommands describe "list-due" <<'HEREDOC'
 Usage:
-  nb list-due [--sorted | --overdue]
+  nb list-due [--sorted | --overdue | --done]
 
 Description:
   Lists todos in the current notebook that include a ## Due section.
 
 Options:
+  --done     Show only completed todos.
   --sorted   Sort todos by due date.
   --overdue  Show only overdue todos.
 
@@ -19,8 +20,8 @@ HEREDOC
 _list-due() {
   mode="${1:-}"
 
-  if [[ -n "$mode" && "$mode" != "--sorted" && "$mode" != "--overdue" ]]; then
-    >&2 echo "Error: Invalid option. Use --sorted or --overdue, or leave blank."
+  if [[ -n "$mode" && "$mode" != "--sorted" && "$mode" != "--overdue" && "$mode" != "--done" ]]; then
+    >&2 echo "Error: Invalid option. Use --sorted, --overdue, or --done, or leave blank."
     _subcommands describe "list-due"
     return 1
   fi
@@ -31,6 +32,19 @@ _list-due() {
   output=""
   while IFS= read -r id; do
     content=$(nb show "$id" --print --no-color 2>/dev/null)
+
+    if echo "$content" | grep -qE "^# \[[xX]\] "; then
+      is_done=true
+    else
+      is_done=false
+    fi
+
+    if [[ "$mode" == "--done" ]]; then
+      ! "$is_done" && continue
+    else
+      "$is_done" && continue
+    fi
+
     title=$(echo "$content" | awk '/^# \[.\] / {sub(/^# \[[ xX]\] /,""); print; exit}')
 
     due=$(echo "$content" | awk '
@@ -39,29 +53,55 @@ _list-due() {
     ')
 
     if [[ -n "$due" ]]; then
-      printf -v line "%s\t%s\t%s\n" "$due" "$id" "$title"
+      printf -v line "%s\t%s\t%s\t%s\n" "$due" "$id" "$title" "$([ "$is_done" == true ] && echo "done" || echo "pending")"
       output+="$line"
     fi
   done <<< "$todo_ids"
 
-  [[ -z "$output" ]] && { echo "No todos with due dates found."; return 0; }
+  if [[ -z "$(echo "$output" | grep -v '^\s*$')" ]]; then
+      if [[ "$mode" == "--done" ]]; then
+          echo "No completed todos with due dates found."
+      else
+          echo "No todos with due dates found."
+      fi
+      return 0
+  fi
 
   today=$(date +%F)
   case "$mode" in
     --sorted)
       echo "Todos with Due Dates (Sorted):"
       echo "------------------------------"
-      printf "%s" "$output" | grep -v '^\s*$' | sort | awk -F'\t' '{ printf "• [%s] %s (Due: %s)\n", $2, $3, $1 }'
+      printf "%s" "$output" | grep -v '^\s*$' | sort -k1 | while IFS=$'\t' read -r due id title status; do
+        # Modified line: Always print ✔️, then conditionally print [x] or [ ]
+        printf "\033[90m[\033[94m%s\033[90m]\033[0m ✔️ \033[90m[\033[94m%s\033[90m]\033[0m %s (Due: %s)\n" "$id" "$([ "$status" == "done" ] && echo "x" || echo " ")" "$title" "$due"
+      done
       ;;
     --overdue)
       echo "Overdue Todos:"
       echo "--------------"
-      printf "%s" "$output" | grep -v '^\s*$' | awk -F'\t' -v today="$today" '$1 < today { printf "• [%s] %s (Due: %s)\n", $2, $3, $1 }'
+      printf "%s" "$output" | grep -v '^\s*$' | while IFS=$'\t' read -r due id title status; do
+        if [[ "$due" < "$today" ]]; then
+          # Modified line: Always print ✔️, then conditionally print [x] or [ ]
+          printf "\033[90m[\033[94m%s\033[90m]\033[0m ✔️ \033[90m[\033[94m%s\033[90m]\033[0m %s (Due: %s)\n" "$id" "$([ "$status" == "done" ] && echo "x" || echo " ")" "$title" "$due"
+        fi
+      done
+      ;;
+    --done)
+      echo "Completed Todos with Due Dates:"
+      echo "-------------------------------"
+      printf "%s" "$output" | grep -v '^\s*$' | while IFS=$'\t' read -r due id title status; do
+        # For --done, we know they are done, so directly print [x]
+        printf "\033[90m[\033[94m%s\033[90m]\033[0m ✔️ \033[90m[\033[94mx\033[90m]\033[0m %s (Due: %s)\n" "$id" "$title" "$due"
+      done
       ;;
     *)
       echo "Todos with Due Dates:"
       echo "----------------------"
-      printf "%s" "$output" | grep -v '^\s*$' | awk -F'\t' '{ printf "• [%s] %s (Due: %s)\n", $2, $3, $1 }'
+      printf "%s" "$output" | grep -v '^\s*$' | while IFS=$'\t' read -r due id title status; do
+        # Modified line: Always print ✔️, then conditionally print [x] or [ ]
+        printf "\033[90m[\033[94m%s\033[90m]\033[0m ✔️ \033[90m[\033[94m%s\033[90m]\033[0m %s (Due: %s)\n" "$id" "$([ "$status" == "done" ] && echo "x" || echo " ")" "$title" "$due"
+      done
       ;;
   esac
 }
